@@ -1,53 +1,27 @@
-# Pombo - Ứng dụng học Tiếng Anh
+# Pombo - Học Tiếng Anh
 
-English learning app with vocabulary management, spaced-repetition review, and AI-powered content generation.
+App học từ vựng có ôn tập theo lịch, sinh câu hỏi AI.
 
-## Project Structure
+## Cài đặt Backend
 
-```
-Pombo/
-├── Frontend/          # Expo Router + React Native
-│   ├── app/           # Expo Router file-based routes
-│   ├── src/
-│   │   ├── components/   # UI components
-│   │   ├── constants/    # Theme, colors
-│   │   ├── services/     # API client, auth
-│   │   ├── store/        # Zustand stores
-│   │   └── types/        # Shared TypeScript types
-│   ├── app.json
-│   └── package.json
-├── Backend/           # FastAPI + Python
-│   ├── app/
-│   │   ├── core/         # DB, AI, JWT, config
-│   │   ├── routes/       # auth.py, vocabulary.py
-│   │   └── schemas/      # Pydantic models
-│   ├── .env.example
-│   └── README.md
-└── README.md          ← you are here
-```
-
----
-
-## Backend Setup
-
-### Requirements
-
+### Yêu cầu
 - Python >= 3.11
-- PostgreSQL (Supabase or local)
-- `uv` package manager (recommended) or pip
+- PostgreSQL (Supabase)
+- `uv` (hoặc pip)
 
-### 1. Environment
+### 1. Tạo file .env
 
 ```bash
 cd Backend
 cp .env.example .env
-# Edit .env:
-#   DATABASE_URL=postgresql://user:pass@host:5432/pombo
-#   JWT_SECRET=<random-string>
-#   OPENROUTER_API_KEY=sk-or-v1-...
 ```
 
-### 2. Install & Run
+Sửa file `.env`:
+- `DATABASE_URL` — link kết nối PostgreSQL
+- `JWT_SECRET` — chuỗi bí mật để ký token
+- `OPENROUTER_API_KEY` — key từ https://openrouter.ai/keys (miễn phí, không cần credit card)
+
+### 2. Cài thư viện & chạy
 
 ```bash
 cd Backend
@@ -55,137 +29,139 @@ uv pip install -e .
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-API docs: http://localhost:8000/docs
+Mở http://localhost:8000/docs để xem thử API.
 
 ---
 
-## Frontend Setup
+## Backend có những gì?
 
-### Requirements
+### 1. Đăng ký / Đăng nhập (`/auth`)
 
-- Node.js >= 18
-- npm or yarn
+| Việc | Gửi lên |
+|------|---------|
+| Đăng ký | `POST /auth/register` với `{name, email, password, confirm_password}` |
+| Đăng nhập | `POST /auth/login` với `{email, password}` → trả về `access_token` + `refresh_token` |
+| Làm mới token | `POST /auth/refresh` với `{refresh_token}` |
+| Đăng xuất | `POST /auth/logout` với `{refresh_token}` (cần Bearer token) |
+| Xem profile | `GET /auth/me` (cần Bearer token) |
 
-### Install & Run
+Sau khi login, lấy `access_token` gửi kèm header `Authorization: Bearer <token>` cho các API cần auth.
 
-```bash
-cd Frontend
-npm install
-npx expo start          # Dev server
-npx expo start --web    # Web preview
-npx expo start --android  # Android
-npx expo start --ios    # iOS
-```
+### 2. Tra cứu từ vựng
 
----
+| Việc | Gửi lên |
+|------|---------|
+| Tìm từ | `GET /vocabulary/search?q=hello&limit=50` |
+| Xem danh sách | `GET /vocabulary?offset=0&limit=50` (2000 từ, load dần) |
+| Lấy từ random | `GET /vocabulary/distractors?exclude_ids=id1,id2&limit=10` (làm đáp án nhiễu) |
 
-## API Endpoints
+3 API này **không cần** đăng nhập.
 
-All authenticated endpoints require `Authorization: Bearer <access_token>`.
+### 3. Sổ tay từ vựng (Notebook) — cần đăng nhập
 
-### Auth (`/auth`)
+| Việc | Gửi lên |
+|------|---------|
+| Thêm từ vào sổ tay | `POST /vocabulary/sync` với `{vocabulary_id: "uuid"}` |
+| Xem từ đã lưu | `GET /vocabulary/mine` |
+| Bật/tắt ôn tập | `PATCH /vocabulary/mine/{id}/toggle` |
+| Đặt level | `PATCH /vocabulary/mine/{id}/level` với `{level: 1-5}` |
+| Xoá khỏi sổ tay | `DELETE /vocabulary/mine/{id}` |
 
-| Method | Path | Auth | Description |
-|--------|------|------|-------------|
-| POST | `/auth/register` | No | Create account |
-| POST | `/auth/login` | No | Login |
-| POST | `/auth/refresh` | No | Refresh access token |
-| POST | `/auth/logout` | Yes | Logout |
-| GET | `/auth/me` | Yes | Get profile |
+**Giới hạn:** Chỉ thêm được tối đa **10 từ/ngày**. Quá 10 sẽ báo lỗi 429.
 
-### Vocabulary (`/vocabulary`)
+### 4. Ôn tập (Spaced Repetition) — cần đăng nhập
 
-#### Search & Browse
+| Việc | Gửi lên |
+|------|---------|
+| Lấy từ cần ôn | `GET /vocabulary/review?limit=10` |
+| Gửi kết quả | `POST /vocabulary/review/{id}/answer` với `{correct: true/false}` |
 
-| Method | Path | Auth | Description |
-|--------|------|------|-------------|
-| GET | `/vocabulary/search?q=&limit=` | No | Search words |
-| GET | `/vocabulary?offset=&limit=` | No | Paginated vocabulary list |
-| GET | `/vocabulary/distractors?exclude_ids=&limit=` | No | Random words for quiz |
+**Cách hoạt động:**
+- Từ mới thêm vào → `review_level = 5`
+- **Trả lời đúng:** streak +1. Nếu streak = 3 hoặc đã 3 ngày → level giảm 1 (tối thiểu 1), streak về 0
+- **Trả lời sai:** streak = 0, level = max(level - 1, 1)
+- **Khoảng cách ôn tập:**
+  - Level 1: 1 ngày sau
+  - Level 2: 3 ngày
+  - Level 3: 7 ngày
+  - Level 4: 14 ngày
+  - Level 5: 30 ngày
+- Nếu level chưa giảm (streak < 3 và chưa đủ 3 ngày) → hẹn ôn lại vào **ngày hôm sau**
 
-#### Notebook
+### 5. AI sinh câu hỏi (OpenRouter) — cần đăng nhập
 
-| Method | Path | Auth | Description |
-|--------|------|------|-------------|
-| POST | `/vocabulary/sync` | Yes | Add word to notebook |
-| GET | `/vocabulary/mine` | Yes | List user's words |
-| PATCH | `/vocabulary/mine/{id}/toggle` | Yes | Toggle review flag |
-| PATCH | `/vocabulary/mine/{id}/level` | Yes | Set review level |
-| DELETE | `/vocabulary/mine/{id}` | Yes | Remove from notebook |
+Dùng AI để sinh nội dung cho từ vựng.
 
-Daily sync limit: **10 words/day/user** (429 on exceed).
+| Việc | Gửi lên |
+|------|---------|
+| Sinh 3 câu ví dụ | `GET /vocabulary/{id}/ai/examples` |
+| Sinh đáp án nhiễu | `GET /vocabulary/{id}/ai/distractors?count=3` |
+| Sinh nhiễu hàng loạt | `POST /vocabulary/ai/distractors/batch` với `{vocabulary_ids: [...], count: 3}` |
 
-#### Review System
+**AI xài model gì?** `nvidia/nemotron-3-super-120b-a12b:free` — free, không cần credit card.
 
-| Method | Path | Auth | Description |
-|--------|------|------|-------------|
-| GET | `/vocabulary/review?limit=10` | Yes | Get words for review |
-| POST | `/vocabulary/review/{id}/answer` | Yes | Submit answer |
+**Có cache không?** Có. Kết quả AI được lưu 30 ngày trong bảng `ai_examples_cache` và `ai_distractors_cache`. Lần sau xài lại không cần gọi AI nữa.
 
-**Spaced Repetition Logic:**
-
-- **New word:** `review_level = 5`, `correct_streak = 0`
-- **Correct:** streak++. If streak == 3 OR 3 days elapsed → level-- (min 1), streak = 0
-- **Wrong:** streak = 0, level = max(level - 1, 1)
-- **Intervals:** `{1: 1d, 2: 3d, 3: 7d, 4: 14d, 5: 30d}`
-- **No level decrease →** next review in 1 day
-
-#### AI Features (OpenRouter)
-
-| Method | Path | Auth | Description |
-|--------|------|------|-------------|
-| GET | `/vocabulary/{id}/ai/examples` | Yes | 3 AI example sentences |
-| GET | `/vocabulary/{id}/ai/distractors?count=3` | Yes | AI wrong definitions |
-| POST | `/vocabulary/ai/distractors/batch` | Yes | Batch distractors |
-
-Results cached 30 days in `ai_examples_cache` / `ai_distractors_cache`. Gracefully returns `[]` if OpenRouter is down.
+**Lỡ hết quota / lỗi?** API trả về `[]` thay vì crash.
 
 ---
 
-## Quick Test
-
-### With curl (PowerShell)
+## Test nhanh bằng curl (PowerShell)
 
 ```powershell
-# Login
-$login = curl -Method POST -ContentType "application/json" `
+# 1. Đăng nhập
+$r = curl -Method POST -ContentType "application/json" `
   -Body '{"email":"test@test.com","password":"123456"}' `
   http://localhost:8000/auth/login | ConvertFrom-Json
-$token = $login.access_token
+$token = $r.access_token
 
-# Sync a word
+# 2. Thêm từ vào sổ tay
 curl -Method POST -ContentType "application/json" `
   -Headers @{Authorization="Bearer $token"} `
   -Body '{"vocabulary_id":"000bc234-f75f-4487-8b6b-70390978539a"}' `
   http://localhost:8000/vocabulary/sync
 
-# Review
+# 3. Xem từ đã lưu
+curl -Method GET -Headers @{Authorization="Bearer $token"} `
+  http://localhost:8000/vocabulary/mine
+
+# 4. Lấy từ để ôn tập
 curl -Method GET -Headers @{Authorization="Bearer $token"} `
   http://localhost:8000/vocabulary/review?limit=10
 
-# Submit answer
+# 5. Gửi kết quả ôn tập (trả lời đúng)
 curl -Method POST -ContentType "application/json" `
   -Headers @{Authorization="Bearer $token"} `
   -Body '{"correct":true}' `
   http://localhost:8000/vocabulary/review/{vocab_id}/answer
 
-# AI distractors
+# 6. AI sinh đáp án nhiễu
 curl -Method GET -Headers @{Authorization="Bearer $token"} `
   http://localhost:8000/vocabulary/{vocab_id}/ai/distractors?count=3
 ```
 
-### Test accounts
+### Tài khoản test có sẵn
 
-- `test@test.com` / `123456` — has 10 pre-synced words
+- `test@test.com` / `123456` — có 10 từ trong sổ tay
 
 ---
 
-## Troubleshooting
+## Lỗi thường gặp
 
-| Symptom | Fix |
-|---------|-----|
-| 422 on auth requests | Missing `Content-Type: application/json` header |
-| Empty review results | No synced words — check `/vocabulary/mine` or sync via Search tab |
-| AI returns `[]` | Check `OPENROUTER_API_KEY` in `Backend/.env` |
-| 429 on sync | Daily limit (10 words) reached — wait until tomorrow |
-| 401 on auth | Token expired — refresh or re-login |
+| Lỗi | Nguyên nhân |
+|-----|-------------|
+| 422 khi gọi API | Thiếu header `Content-Type: application/json` |
+| Ôn tập không có từ | User chưa thêm từ nào vào sổ tay (gọi `/vocabulary/mine` để kiểm tra) |
+| AI trả về rỗng | Sai `OPENROUTER_API_KEY` trong `.env` hoặc key hết quota |
+| 429 khi sync | Đã thêm đủ 10 từ hôm nay |
+| 401 | Token hết hạn — refresh hoặc login lại |
+
+---
+
+## Frontend (chạy thử)
+
+```bash
+cd Frontend
+npm install
+npx expo start --web
+```
