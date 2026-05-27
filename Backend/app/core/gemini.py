@@ -8,7 +8,7 @@ class GeminiService:
     
     def __init__(self):
         self.api_key = settings.gemini_api_key
-        self.model_name = "gemini-2.0-flash"
+        self.model_name = "gemini-2.5-flash"
         if self.api_key:
             self.client = genai.Client(api_key=self.api_key)
         else:
