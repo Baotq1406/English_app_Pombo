@@ -1,0 +1,51 @@
+{
+  "expo": {
+    "name": "POMBO",
+    "slug": "POMBO-App",
+    "scheme": "pombo",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./src/assets/images/dragon-nobg.png",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": true,
+    "splash": {
+      "image": "./src/assets/images/dragon-nobg.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#F8FAFC"
+    },
+    "ios": {
+      "supportsTablet": true
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./src/assets/images/dragon-nobg.png",
+        "backgroundColor": "#ffffff"
+      },
+      "edgeToEdgeEnabled": true,
+      "predictiveBackGestureEnabled": false
+    },
+    "web": {
+      "favicon": "./src/assets/images/dragon-nobg.png"
+    },
+    "plugins": [
+      "expo-router",
+      [
+        "expo-font",
+        {
+          "fonts": [
+            "./src/assets/fonts/Be-Vietnam-Pro/BeVietnamPro-Regular.ttf",
+            "./src/assets/fonts/Be-Vietnam-Pro/BeVietnamPro-Medium.ttf",
+            "./src/assets/fonts/Be-Vietnam-Pro/BeVietnamPro-SemiBold.ttf",
+            "./src/assets/fonts/Baloo-2/Baloo2-Medium.ttf",
+            "./src/assets/fonts/Baloo-2/Baloo2-Bold.ttf",
+            "./src/assets/fonts/Baloo-2/Baloo2-ExtraBold.ttf"
+          ]
+        }
+      ],
+      "expo-audio"
+    ],
+    "experiments": {
+      "typedRoutes": true
+    }
+  }
+}
