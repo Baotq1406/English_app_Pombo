@@ -11,7 +11,7 @@ class Settings(BaseSettings):
     
     # AI & LLM (OpenRouter)
     openrouter_api_key: str = ""
-    openrouter_model: str = "openai/gpt-4o-mini"
+    openrouter_model: str = "nvidia/nemotron-3-super-120b-a12b:free"
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
