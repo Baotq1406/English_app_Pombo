@@ -3,7 +3,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.core.db import db
-from app.core.gemini import gemini_service
+from app.core.gemini import ai_service
 from app.dependencies import get_current_user
 from app.schemas.vocabulary import (
     SubmitAnswerRequest,
@@ -238,7 +238,7 @@ async def get_ai_examples(
     word_type = vocab.get("type", "word")
     
     try:
-        examples = await gemini_service.generate_examples(word, meaning_vi, word_type)
+        examples = await ai_service.generate_examples(word, meaning_vi, word_type)
         
         if examples:
             await db.cache_ai_examples(vocabulary_id, examples)
@@ -255,31 +255,24 @@ async def get_ai_distractors(
     count: int = Query(default=3, ge=1, le=5),
     user=Depends(get_current_user),
 ):
-    """
-    Generate AI distractors (plausible wrong answers) for a vocabulary word.
-    Useful for creating better quiz questions.
-    """
     user_id = user.get("sub")
     if not user_id:
         raise HTTPException(status_code=401, detail="Invalid token payload")
     
-    # Get vocabulary details
     vocab = await db.get_vocabulary_by_id(vocabulary_id)
     if not vocab:
         raise HTTPException(status_code=404, detail="Vocabulary not found")
     
-    # Check cache first
     cached_distractors = await db.get_ai_distractors_cache(vocabulary_id, count)
     if cached_distractors:
         return cached_distractors
     
-    # Generate distractors using Gemini
     word = vocab.get("word", "")
     meaning_vi = vocab.get("meaning_vi", "")
     word_type = vocab.get("type", "word")
     
     try:
-        distractors = await gemini_service.generate_distractors(
+        distractors = await ai_service.generate_distractors(
             word, meaning_vi, word_type, count
         )
         

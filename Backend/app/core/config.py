@@ -9,8 +9,9 @@ class Settings(BaseSettings):
     jwt_audience: str = "pombo-app"
     refresh_token_expire_days: int = 30
     
-    # AI & LLM
-    gemini_api_key: str = ""  # Optional for development; required for AI features
+    # AI & LLM (OpenRouter)
+    openrouter_api_key: str = ""
+    openrouter_model: str = "openai/gpt-4o-mini"
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
