@@ -332,7 +332,7 @@ class Database:
         async with self._pool.acquire() as conn:
             row = await conn.fetchrow(
                 """
-                SELECT review_level, correct_streak, added_at 
+                SELECT review_level, correct_streak, created_at 
                 FROM public.user_vocabulary 
                 WHERE user_id = $1 AND vocabulary_id = $2
                 """,
@@ -343,14 +343,14 @@ class Database:
             
             current_level = row["review_level"]
             current_streak = row["correct_streak"] or 0
-            added_at = row["added_at"]
+            created_at = row["created_at"]
             
             if correct:
                 new_streak = current_streak + 1
                 new_level = current_level
                 
                 # Check: 3 consecutive correct OR 3 days elapsed
-                days_elapsed = (datetime.now(timezone.utc) - added_at.replace(tzinfo=timezone.utc)).days
+                days_elapsed = (datetime.now(timezone.utc) - created_at.replace(tzinfo=timezone.utc)).days
                 should_decrease = (new_streak == 3) or (days_elapsed >= 3)
                 
                 if should_decrease and current_level > 1:
