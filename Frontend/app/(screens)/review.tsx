@@ -25,26 +25,29 @@ function shuffleArray<T>(arr: T[]): T[] {
 
 async function buildQuestions(words: UserVocabularyData[]): Promise<ReviewQuestion[]> {
   const questions: ReviewQuestion[] = [];
-  
-  // Pre-fetch fallback distractor pool in case AI fails
+  const correctTexts = new Map(words.map(w => [w.id, w.meaning_vi || '']));
+
+  // Fetch all AI distractors in 1 batch call
+  let aiDistractersMap: Record<string, string[]> = {};
+  try {
+    const ids = words.map(w => w.id);
+    aiDistractersMap = await vocabApi.getBatchAIDistracters(ids, 3);
+  } catch {
+    console.error('Failed to fetch batch AI distractors');
+  }
+
+  // Pre-fetch fallback distractor pool
   const excludeIds = words.map(w => w.id).join(',');
   let fallbackDistracters: string[] = [];
   try {
     const distractorData = await vocabApi.getDistracters(excludeIds, Math.min(words.length * 3, 100));
     fallbackDistracters = distractorData.map(d => d.meaning_vi).filter(Boolean) as string[];
   } catch {}
-  
+
   for (const word of words) {
-    const correctText = word.meaning_vi || '';
-    let distractors: string[] = [];
-    
-    try {
-      const aiDistracters = await vocabApi.getAIDistracters(word.id, 3);
-      distractors = aiDistracters.filter(d => d !== correctText);
-    } catch {
-      console.error('Failed to generate AI distractors');
-    }
-    
+    const correctText = correctTexts.get(word.id) || '';
+    let distractors: string[] = (aiDistractersMap[word.id] || []).filter(d => d !== correctText);
+
     // Fallback to distractor pool if AI didn't give enough
     if (distractors.length < 3) {
       const pool = fallbackDistracters.filter(d => d !== correctText);
@@ -53,20 +56,19 @@ async function buildQuestions(words: UserVocabularyData[]): Promise<ReviewQuesti
         if (!distractors.includes(d)) distractors.push(d);
       }
     }
-    
-    // Last resort - any remaining slot gets placeholder
+
     while (distractors.length < 3) {
       distractors.push('(definition not available)');
     }
-    
+
     const allOptions = shuffleArray([
       { text: correctText, isCorrect: true },
       ...distractors.slice(0, 3).map(m => ({ text: m, isCorrect: false })),
     ]);
-    
+
     const correctOptionIdx = allOptions.findIndex(o => o.isCorrect);
     const correctOptionId = String.fromCharCode(65 + correctOptionIdx);
-    
+
     questions.push({
       word,
       options: allOptions.map((opt, idx) => ({
@@ -76,7 +78,7 @@ async function buildQuestions(words: UserVocabularyData[]): Promise<ReviewQuesti
       correctId: correctOptionId,
     });
   }
-  
+
   return questions;
 }
 

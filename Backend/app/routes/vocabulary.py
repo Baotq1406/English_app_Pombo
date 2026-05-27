@@ -1,6 +1,7 @@
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel
 
 from app.core.db import db
 from app.core.gemini import ai_service
@@ -283,3 +284,56 @@ async def get_ai_distractors(
     except Exception as e:
         print(f"AI distractors error: {e}")
         return []
+
+
+class BatchDistractorRequest(BaseModel):
+    vocabulary_ids: list[str]
+    count: int = 3
+
+
+@router.post("/ai/distractors/batch", response_model=dict[str, list[str]])
+async def get_batch_ai_distractors(
+    payload: BatchDistractorRequest,
+    user=Depends(get_current_user),
+):
+    user_id = user.get("sub")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Invalid token payload")
+
+    result: dict[str, list[str]] = {}
+    uncached: list[tuple[str, dict]] = []
+
+    for vid in payload.vocabulary_ids:
+        cached = await db.get_ai_distractors_cache(vid, payload.count)
+        if cached:
+            result[vid] = cached
+        else:
+            vocab = await db.get_vocabulary_by_id(vid)
+            if vocab:
+                uncached.append((vid, vocab))
+            else:
+                result[vid] = []
+
+    if uncached:
+        prompts = []
+        for vid, vocab in uncached:
+            word = vocab.get("word", "")
+            meaning_vi = vocab.get("meaning_vi", "")
+            word_type = vocab.get("type", "word")
+            prompts.append((vid, word, meaning_vi, word_type))
+
+        for vid, word, meaning_vi, word_type in prompts:
+            try:
+                distractors = await ai_service.generate_distractors(
+                    word, meaning_vi, word_type, payload.count
+                )
+                if distractors:
+                    await db.cache_ai_distractors(vid, distractors)
+                    result[vid] = distractors
+                else:
+                    result[vid] = []
+            except Exception as e:
+                print(f"AI distractors error for {vid}: {e}")
+                result[vid] = []
+
+    return result
