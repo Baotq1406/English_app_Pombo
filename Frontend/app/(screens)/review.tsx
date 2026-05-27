@@ -23,17 +23,25 @@ function shuffleArray<T>(arr: T[]): T[] {
   return copy;
 }
 
-async function buildQuestions(words: UserVocabularyData[]): Promise<ReviewQuestion[]> {
+async function buildQuestions(
+  words: UserVocabularyData[],
+  onProgress?: (current: number, total: number, word: string) => void
+): Promise<ReviewQuestion[]> {
   const questions: ReviewQuestion[] = [];
   const correctTexts = new Map(words.map(w => [w.id, w.meaning_vi || '']));
 
-  // Fetch all AI distractors in 1 batch call
-  let aiDistractersMap: Record<string, string[]> = {};
-  try {
-    const ids = words.map(w => w.id);
-    aiDistractersMap = await vocabApi.getBatchAIDistracters(ids, 3);
-  } catch {
-    console.error('Failed to fetch batch AI distractors');
+  // Fetch AI distractors per word with progress
+  const aiDistractersMap: Record<string, string[]> = {};
+  const total = words.length;
+  for (let i = 0; i < total; i++) {
+    const w = words[i];
+    onProgress?.(i + 1, total, w.word);
+    try {
+      const distractors = await vocabApi.getAIDistracters(w.id, 3);
+      aiDistractersMap[w.id] = distractors;
+    } catch {
+      console.error(`Failed to fetch AI distractors for ${w.word}`);
+    }
   }
 
   // Pre-fetch fallback distractor pool
@@ -48,7 +56,6 @@ async function buildQuestions(words: UserVocabularyData[]): Promise<ReviewQuesti
     const correctText = correctTexts.get(word.id) || '';
     let distractors: string[] = (aiDistractersMap[word.id] || []).filter(d => d !== correctText);
 
-    // Fallback to distractor pool if AI didn't give enough
     if (distractors.length < 3) {
       const pool = fallbackDistracters.filter(d => d !== correctText);
       for (const d of pool) {
@@ -105,6 +112,11 @@ export default function ReviewScreen() {
   const [exitAction, setExitAction] = useState<any>(null);
 
   const [currentNote, setCurrentNote] = useState<string | null>(null);
+  const [generating, setGenerating] = useState(false);
+  const [generatingMsg, setGeneratingMsg] = useState('');
+  const [progressCurrent, setProgressCurrent] = useState(0);
+  const [progressTotal, setProgressTotal] = useState(0);
+  const [progressWord, setProgressWord] = useState('');
 
   useEffect(() => {
     vocabApi.getReviewWords(10).then(async (data) => {
@@ -114,13 +126,21 @@ export default function ReviewScreen() {
         return;
       }
       setWords(data);
+      setGenerating(true);
+      setProgressTotal(data.length);
       try {
-        const builtQuestions = await buildQuestions(data);
+        const builtQuestions = await buildQuestions(data, (current, total, word) => {
+          setProgressCurrent(current);
+          setProgressTotal(total);
+          setProgressWord(word);
+          setGeneratingMsg(`Đang tạo câu hỏi AI (${current}/${total})`);
+        });
         setQuestions(builtQuestions);
       } catch (err) {
         console.error('Failed to build questions:', err);
         setError('Không thể chuẩn bị bài ôn tập. Vui lòng thử lại sau.');
       }
+      setGenerating(false);
       setLoading(false);
     }).catch(err => {
       setError('Không thể tải từ ôn tập. Vui lòng thử lại sau.');
@@ -204,12 +224,31 @@ export default function ReviewScreen() {
   };
 
   if (loading) {
+    const pct = progressTotal > 0 ? (progressCurrent / progressTotal) * 100 : 0;
     return (
-      <View style={[styles.centerContainer, { backgroundColor: colors.background }]}>
-        <ActivityIndicator size="large" color={colors.primary} />
-        <Typography variant="bodyBase" color={colors.textSecondary} style={{ marginTop: 16 }}>
-          Đang tải từ ôn tập...
-        </Typography>
+      <View style={[styles.centerContainer, { backgroundColor: colors.background, paddingHorizontal: 40 }]}>
+        {!generating ? (
+          <>
+            <ActivityIndicator size="large" color={colors.primary} />
+            <Typography variant="bodyBase" color={colors.textSecondary} style={{ marginTop: 16 }}>
+              Đang tải từ ôn tập...
+            </Typography>
+          </>
+        ) : (
+          <>
+            <View style={[styles.progressBarBg, { backgroundColor: colors.disabled }]}>
+              <View style={[styles.progressBarFill, { width: `${pct}%`, backgroundColor: colors.primary }]} />
+            </View>
+            <Typography variant="bodyBase" color={colors.textSecondary} style={{ marginTop: 20 }}>
+              {generatingMsg}
+            </Typography>
+            {progressWord ? (
+              <Typography variant="bodySmall" color={colors.textSecondary} style={{ marginTop: 8 }}>
+                Đang tạo cho từ: {progressWord}
+              </Typography>
+            ) : null}
+          </>
+        )}
       </View>
     );
   }

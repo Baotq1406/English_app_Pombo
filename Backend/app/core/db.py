@@ -318,7 +318,6 @@ class Database:
             JOIN public.vocabulary v ON v.id = uv.vocabulary_id
             WHERE uv.user_id = $1
               AND uv.is_reviewing = true
-              AND uv.next_review_at <= now()
             ORDER BY RANDOM()
             LIMIT $2
         """
@@ -355,11 +354,12 @@ class Database:
                 
                 if should_decrease and current_level > 1:
                     new_level = current_level - 1
-                    new_streak = 0  # Reset streak after level decrease
-                
-                # Intervals for next review (based on new_level)
-                intervals = {1: 1, 2: 3, 3: 7, 4: 14, 5: 30}
-                days = intervals.get(new_level, 1)
+                    new_streak = 0
+                    intervals = {1: 1, 2: 3, 3: 7, 4: 14, 5: 30}
+                    days = intervals.get(new_level, 1)
+                else:
+                    # Level didn't decrease - review again soon
+                    days = 1
             else:
                 # Wrong answer: reset streak + decrease level
                 new_streak = 0
