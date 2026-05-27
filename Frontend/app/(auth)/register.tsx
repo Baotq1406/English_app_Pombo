@@ -8,21 +8,40 @@ import { HeaderAuth } from '@/components/ui/HeaderAuth';
 import { Icon } from '@/components/ui/Icon';
 import { Colors } from '@/constants/theme';
 import { useColorScheme } from 'react-native';
+import { useAuthStore } from '@/store/useAuthStore';
 
 export default function RegisterScreen() {
     const router = useRouter();
     const colorScheme = useColorScheme() ?? 'light';
     const colors = Colors[colorScheme];
 
-    const handleRegister = () => {
-        router.push('/(auth)/welcome' as any);
-    };
+    const register = useAuthStore(state => state.register);
 
     const [name, setName] = useState('');
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
     const [confirmPassword, setConfirmPassword] = useState('');
     const [agreeTerms, setAgreeTerms] = useState(false);
+    const [error, setError] = useState('');
+
+    const handleRegister = async () => {
+        setError('');
+        try {
+            await register({
+                name,
+                email,
+                password,
+                confirm_password: confirmPassword,
+            });
+            router.push('/(auth)/welcome' as any);
+        } catch (e: any) {
+            const detail = e?.payload?.detail;
+            const msg = typeof detail === 'string' ? detail
+                : Array.isArray(detail) ? detail.map((d: any) => d.msg || d.message).join(', ')
+                : e?.message || 'Đã có lỗi xảy ra';
+            setError(msg);
+        }
+    };
 
     return (
         <View style={{ flex: 1, backgroundColor: colors.background }}>
@@ -65,6 +84,12 @@ export default function RegisterScreen() {
                             Tôi đồng ý với <Typography variant="caption" color={colors.primary}>Điều khoản sử dụng</Typography> và <Typography variant="caption" color={colors.primary}>Chính sách bảo mật</Typography> của hệ thống
                         </Typography>
                     </TouchableOpacity>
+
+                    {error ? (
+                        <Typography variant="bodySmall" color={colors.danger} style={{ textAlign: 'center', marginBottom: 12 }}>
+                            {error}
+                        </Typography>
+                    ) : null}
 
                     <View style={styles.actionContainer}>
                         <ButtonCTA title="Đăng ký" onPress={handleRegister} disabled={!agreeTerms} />

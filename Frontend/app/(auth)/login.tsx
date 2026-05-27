@@ -18,6 +18,20 @@ export default function LoginScreen() {
 
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
+    const [error, setError] = useState('');
+
+    const handleLogin = async () => {
+        setError('');
+        try {
+            await login({ email, password });
+        } catch (e: any) {
+            const detail = e?.payload?.detail;
+            const msg = typeof detail === 'string' ? detail
+                : Array.isArray(detail) ? detail.map((d: any) => d.msg || d.message).join(', ')
+                : e?.message || 'Đã có lỗi xảy ra';
+            setError(msg);
+        }
+    };
 
     return (
         <KeyboardAvoidingView style={{ flex: 1, backgroundColor: colors.background }} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
@@ -62,8 +76,14 @@ export default function LoginScreen() {
                     </TouchableOpacity>
                 </View>
 
-                <View style={styles.actionContainer}>
-                    <ButtonCTA title="Đăng nhập" onPress={() => login()} />
+                    {error ? (
+                        <Typography variant="bodySmall" color={colors.danger} style={{ textAlign: 'center', marginBottom: 12 }}>
+                            {error}
+                        </Typography>
+                    ) : null}
+
+                    <View style={styles.actionContainer}>
+                    <ButtonCTA title="Đăng nhập" onPress={handleLogin} />
 
                     <View style={styles.dividerContainer}>
                         <View style={[styles.divider, { backgroundColor: colors.disabled }]} />

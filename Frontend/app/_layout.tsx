@@ -9,7 +9,7 @@ import { useAuthStore } from '@/store/useAuthStore';
 SplashScreen.preventAutoHideAsync();
 
 export default function RootLayout() {
-    const { isFirstLaunch, isAuthenticated, checkFirstLaunch } = useAuthStore();
+    const { isFirstLaunch, isAuthenticated, checkFirstLaunch, bootstrap } = useAuthStore();
     const segments = useSegments();
     const router = useRouter();
     const colorScheme = useColorScheme() ?? 'light';
@@ -25,6 +25,7 @@ export default function RootLayout() {
 
     useEffect(() => {
         checkFirstLaunch();
+        bootstrap();
     }, []);
 
     useEffect(() => {
