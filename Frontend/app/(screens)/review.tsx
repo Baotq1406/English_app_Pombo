@@ -23,42 +23,70 @@ function shuffleArray<T>(arr: T[]): T[] {
   return copy;
 }
 
-async function buildQuestions(words: UserVocabularyData[]): Promise<ReviewQuestion[]> {
-  // Get word IDs to exclude from distractors
+async function buildQuestions(
+  words: UserVocabularyData[],
+  onProgress?: (current: number, total: number, word: string) => void
+): Promise<ReviewQuestion[]> {
+  const questions: ReviewQuestion[] = [];
+  const correctTexts = new Map(words.map(w => [w.id, w.meaning_vi || '']));
+
+  // Fetch AI distractors per word with progress
+  const aiDistractersMap: Record<string, string[]> = {};
+  const total = words.length;
+  for (let i = 0; i < total; i++) {
+    const w = words[i];
+    onProgress?.(i + 1, total, w.word);
+    try {
+      const distractors = await vocabApi.getAIDistracters(w.id, 3);
+      aiDistractersMap[w.id] = distractors;
+    } catch {
+      console.error(`Failed to fetch AI distractors for ${w.word}`);
+    }
+  }
+
+  // Pre-fetch fallback distractor pool
   const excludeIds = words.map(w => w.id).join(',');
-  
-  // Fetch distractor pool
-  const distractorData = await vocabApi.getDistracters(excludeIds, Math.min(words.length * 3, 100));
-  const distractorMeanings = distractorData
-    .map(d => d.meaning_vi)
-    .filter(Boolean) as string[];
-  
-  return words.map(word => {
-    const correctText = word.meaning_vi || '';
-    
-    // Pick 3 unique distractors from the pool
-    const availableDistracters = distractorMeanings.filter(m => m !== correctText);
-    const shuffled = shuffleArray(availableDistracters).slice(0, 3);
-    
-    // If we have less than 3, just use what we have (no placeholders)
+  let fallbackDistracters: string[] = [];
+  try {
+    const distractorData = await vocabApi.getDistracters(excludeIds, Math.min(words.length * 3, 100));
+    fallbackDistracters = distractorData.map(d => d.meaning_vi).filter(Boolean) as string[];
+  } catch {}
+
+  for (const word of words) {
+    const correctText = correctTexts.get(word.id) || '';
+    let distractors: string[] = (aiDistractersMap[word.id] || []).filter(d => d !== correctText);
+
+    if (distractors.length < 3) {
+      const pool = fallbackDistracters.filter(d => d !== correctText);
+      for (const d of pool) {
+        if (distractors.length >= 3) break;
+        if (!distractors.includes(d)) distractors.push(d);
+      }
+    }
+
+    while (distractors.length < 3) {
+      distractors.push('(definition not available)');
+    }
+
     const allOptions = shuffleArray([
       { text: correctText, isCorrect: true },
-      ...shuffled.map(m => ({ text: m, isCorrect: false })),
+      ...distractors.slice(0, 3).map(m => ({ text: m, isCorrect: false })),
     ]);
-    
-    // Find the correct option's ID (A, B, C, D)
+
     const correctOptionIdx = allOptions.findIndex(o => o.isCorrect);
     const correctOptionId = String.fromCharCode(65 + correctOptionIdx);
-    
-    return {
+
+    questions.push({
       word,
       options: allOptions.map((opt, idx) => ({
         id: String.fromCharCode(65 + idx),
         text: opt.text,
       })),
       correctId: correctOptionId,
-    };
-  });
+    });
+  }
+
+  return questions;
 }
 
 export default function ReviewScreen() {
@@ -84,6 +112,11 @@ export default function ReviewScreen() {
   const [exitAction, setExitAction] = useState<any>(null);
 
   const [currentNote, setCurrentNote] = useState<string | null>(null);
+  const [generating, setGenerating] = useState(false);
+  const [generatingMsg, setGeneratingMsg] = useState('');
+  const [progressCurrent, setProgressCurrent] = useState(0);
+  const [progressTotal, setProgressTotal] = useState(0);
+  const [progressWord, setProgressWord] = useState('');
 
   useEffect(() => {
     vocabApi.getReviewWords(10).then(async (data) => {
@@ -93,13 +126,21 @@ export default function ReviewScreen() {
         return;
       }
       setWords(data);
+      setGenerating(true);
+      setProgressTotal(data.length);
       try {
-        const builtQuestions = await buildQuestions(data);
+        const builtQuestions = await buildQuestions(data, (current, total, word) => {
+          setProgressCurrent(current);
+          setProgressTotal(total);
+          setProgressWord(word);
+          setGeneratingMsg(`Đang tạo câu hỏi AI (${current}/${total})`);
+        });
         setQuestions(builtQuestions);
       } catch (err) {
         console.error('Failed to build questions:', err);
         setError('Không thể chuẩn bị bài ôn tập. Vui lòng thử lại sau.');
       }
+      setGenerating(false);
       setLoading(false);
     }).catch(err => {
       setError('Không thể tải từ ôn tập. Vui lòng thử lại sau.');
@@ -183,12 +224,31 @@ export default function ReviewScreen() {
   };
 
   if (loading) {
+    const pct = progressTotal > 0 ? (progressCurrent / progressTotal) * 100 : 0;
     return (
-      <View style={[styles.centerContainer, { backgroundColor: colors.background }]}>
-        <ActivityIndicator size="large" color={colors.primary} />
-        <Typography variant="bodyBase" color={colors.textSecondary} style={{ marginTop: 16 }}>
-          Đang tải từ ôn tập...
-        </Typography>
+      <View style={[styles.centerContainer, { backgroundColor: colors.background, paddingHorizontal: 40 }]}>
+        {!generating ? (
+          <>
+            <ActivityIndicator size="large" color={colors.primary} />
+            <Typography variant="bodyBase" color={colors.textSecondary} style={{ marginTop: 16 }}>
+              Đang tải từ ôn tập...
+            </Typography>
+          </>
+        ) : (
+          <>
+            <View style={[styles.progressBarBg, { backgroundColor: colors.disabled }]}>
+              <View style={[styles.progressBarFill, { width: `${pct}%`, backgroundColor: colors.primary }]} />
+            </View>
+            <Typography variant="bodyBase" color={colors.textSecondary} style={{ marginTop: 20 }}>
+              {generatingMsg}
+            </Typography>
+            {progressWord ? (
+              <Typography variant="bodySmall" color={colors.textSecondary} style={{ marginTop: 8 }}>
+                Đang tạo cho từ: {progressWord}
+              </Typography>
+            ) : null}
+          </>
+        )}
       </View>
     );
   }

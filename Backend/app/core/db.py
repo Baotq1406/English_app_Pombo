@@ -318,7 +318,6 @@ class Database:
             JOIN public.vocabulary v ON v.id = uv.vocabulary_id
             WHERE uv.user_id = $1
               AND uv.is_reviewing = true
-              AND uv.next_review_at <= now()
             ORDER BY RANDOM()
             LIMIT $2
         """
@@ -332,7 +331,7 @@ class Database:
         async with self._pool.acquire() as conn:
             row = await conn.fetchrow(
                 """
-                SELECT review_level, correct_streak, added_at 
+                SELECT review_level, correct_streak, created_at 
                 FROM public.user_vocabulary 
                 WHERE user_id = $1 AND vocabulary_id = $2
                 """,
@@ -343,23 +342,24 @@ class Database:
             
             current_level = row["review_level"]
             current_streak = row["correct_streak"] or 0
-            added_at = row["added_at"]
+            created_at = row["created_at"]
             
             if correct:
                 new_streak = current_streak + 1
                 new_level = current_level
                 
                 # Check: 3 consecutive correct OR 3 days elapsed
-                days_elapsed = (datetime.now(timezone.utc) - added_at.replace(tzinfo=timezone.utc)).days
+                days_elapsed = (datetime.now(timezone.utc) - created_at.replace(tzinfo=timezone.utc)).days
                 should_decrease = (new_streak == 3) or (days_elapsed >= 3)
                 
                 if should_decrease and current_level > 1:
                     new_level = current_level - 1
-                    new_streak = 0  # Reset streak after level decrease
-                
-                # Intervals for next review (based on new_level)
-                intervals = {1: 1, 2: 3, 3: 7, 4: 14, 5: 30}
-                days = intervals.get(new_level, 1)
+                    new_streak = 0
+                    intervals = {1: 1, 2: 3, 3: 7, 4: 14, 5: 30}
+                    days = intervals.get(new_level, 1)
+                else:
+                    # Level didn't decrease - review again soon
+                    days = 1
             else:
                 # Wrong answer: reset streak + decrease level
                 new_streak = 0
@@ -402,6 +402,86 @@ class Database:
         async with self._pool.acquire() as conn:
             result = await conn.execute(query, user_id, vocab_id)
             return "DELETE 1" in result
+
+    # AI Cache Methods
+    async def get_ai_examples_cache(self, vocab_id: str) -> list[str] | None:
+        """Get cached AI-generated examples. Returns None if expired or not found."""
+        if self._pool is None:
+            raise RuntimeError("Database not connected")
+        
+        import json
+        query = """
+            SELECT examples FROM public.ai_examples_cache
+            WHERE vocabulary_id = $1 AND expires_at > NOW()
+        """
+        async with self._pool.acquire() as conn:
+            result = await conn.fetchval(query, vocab_id)
+            if result:
+                try:
+                    return json.loads(result) if isinstance(result, str) else result
+                except (json.JSONDecodeError, TypeError):
+                    return []
+            return None
+    
+    async def cache_ai_examples(self, vocab_id: str, examples: list[str]) -> bool:
+        """Cache AI-generated examples. Updates if already exists."""
+        if self._pool is None:
+            raise RuntimeError("Database not connected")
+        
+        import json
+        query = """
+            INSERT INTO public.ai_examples_cache (vocabulary_id, examples)
+            VALUES ($1, $2)
+            ON CONFLICT (vocabulary_id) 
+            DO UPDATE SET 
+                examples = $2,
+                created_at = CURRENT_TIMESTAMP,
+                expires_at = CURRENT_TIMESTAMP + INTERVAL '30 days'
+        """
+        async with self._pool.acquire() as conn:
+            examples_json = json.dumps(examples, ensure_ascii=False)
+            await conn.execute(query, vocab_id, examples_json)
+            return True
+    
+    async def get_ai_distractors_cache(self, vocab_id: str, count: int = 3) -> list[str] | None:
+        """Get cached AI-generated distractors. Returns None if expired or not found."""
+        if self._pool is None:
+            raise RuntimeError("Database not connected")
+        
+        import json
+        query = """
+            SELECT distractors FROM public.ai_distractors_cache
+            WHERE vocabulary_id = $1 AND expires_at > NOW()
+        """
+        async with self._pool.acquire() as conn:
+            result = await conn.fetchval(query, vocab_id)
+            if result:
+                try:
+                    distractors = json.loads(result) if isinstance(result, str) else result
+                    return distractors[:count] if isinstance(distractors, list) else []
+                except (json.JSONDecodeError, TypeError):
+                    return []
+            return None
+    
+    async def cache_ai_distractors(self, vocab_id: str, distractors: list[str]) -> bool:
+        """Cache AI-generated distractors. Updates if already exists."""
+        if self._pool is None:
+            raise RuntimeError("Database not connected")
+        
+        import json
+        query = """
+            INSERT INTO public.ai_distractors_cache (vocabulary_id, distractors)
+            VALUES ($1, $2)
+            ON CONFLICT (vocabulary_id) 
+            DO UPDATE SET 
+                distractors = $2,
+                created_at = CURRENT_TIMESTAMP,
+                expires_at = CURRENT_TIMESTAMP + INTERVAL '30 days'
+        """
+        async with self._pool.acquire() as conn:
+            distractors_json = json.dumps(distractors, ensure_ascii=False)
+            await conn.execute(query, vocab_id, distractors_json)
+            return True
 
 
 db = Database()

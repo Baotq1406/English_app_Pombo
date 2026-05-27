@@ -1,8 +1,10 @@
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel
 
 from app.core.db import db
+from app.core.gemini import ai_service
 from app.dependencies import get_current_user
 from app.schemas.vocabulary import (
     SubmitAnswerRequest,
@@ -205,3 +207,133 @@ async def remove_from_notebook(
     if not deleted:
         raise HTTPException(status_code=404, detail="Vocabulary not found in your notebook")
     return {"ok": True}
+
+
+# AI-Powered Features
+@router.get("/{vocabulary_id}/ai/examples", response_model=list[str])
+async def get_ai_examples(
+    vocabulary_id: str,
+    user=Depends(get_current_user),
+):
+    """
+    Generate AI example sentences for a vocabulary word.
+    Returns 3 natural English example sentences.
+    """
+    user_id = user.get("sub")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Invalid token payload")
+    
+    # Get vocabulary details
+    vocab = await db.get_vocabulary_by_id(vocabulary_id)
+    if not vocab:
+        raise HTTPException(status_code=404, detail="Vocabulary not found")
+    
+    # Check cache first
+    cached_examples = await db.get_ai_examples_cache(vocabulary_id)
+    if cached_examples:
+        return cached_examples
+    
+    # Generate examples using Gemini
+    word = vocab.get("word", "")
+    meaning_vi = vocab.get("meaning_vi", "")
+    word_type = vocab.get("type", "word")
+    
+    try:
+        examples = await ai_service.generate_examples(word, meaning_vi, word_type)
+        
+        if examples:
+            await db.cache_ai_examples(vocabulary_id, examples)
+            return examples
+        return []
+    except Exception as e:
+        print(f"AI examples error: {e}")
+        return []
+
+
+@router.get("/{vocabulary_id}/ai/distractors", response_model=list[str])
+async def get_ai_distractors(
+    vocabulary_id: str,
+    count: int = Query(default=3, ge=1, le=5),
+    user=Depends(get_current_user),
+):
+    user_id = user.get("sub")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Invalid token payload")
+    
+    vocab = await db.get_vocabulary_by_id(vocabulary_id)
+    if not vocab:
+        raise HTTPException(status_code=404, detail="Vocabulary not found")
+    
+    cached_distractors = await db.get_ai_distractors_cache(vocabulary_id, count)
+    if cached_distractors:
+        return cached_distractors
+    
+    word = vocab.get("word", "")
+    meaning_vi = vocab.get("meaning_vi", "")
+    word_type = vocab.get("type", "word")
+    
+    try:
+        distractors = await ai_service.generate_distractors(
+            word, meaning_vi, word_type, count
+        )
+        
+        if distractors:
+            await db.cache_ai_distractors(vocabulary_id, distractors)
+            return distractors
+        return []
+    except Exception as e:
+        print(f"AI distractors error: {e}")
+        return []
+
+
+class BatchDistractorRequest(BaseModel):
+    vocabulary_ids: list[str]
+    count: int = 3
+
+
+@router.post("/ai/distractors/batch", response_model=dict[str, list[str]])
+async def get_batch_ai_distractors(
+    payload: BatchDistractorRequest,
+    user=Depends(get_current_user),
+):
+    user_id = user.get("sub")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Invalid token payload")
+
+    result: dict[str, list[str]] = {}
+    uncached: list[tuple[str, dict]] = []
+
+    for vid in payload.vocabulary_ids:
+        cached = await db.get_ai_distractors_cache(vid, payload.count)
+        if cached:
+            result[vid] = cached
+        else:
+            vocab = await db.get_vocabulary_by_id(vid)
+            if vocab:
+                uncached.append((vid, vocab))
+            else:
+                result[vid] = []
+
+    if uncached:
+        prompts = []
+        for vid, vocab in uncached:
+            word = vocab.get("word", "")
+            meaning_vi = vocab.get("meaning_vi", "")
+            word_type = vocab.get("type", "word")
+            prompts.append((vid, word, meaning_vi, word_type))
+
+        for vid, word, meaning_vi, word_type in prompts:
+            try:
+                distractors = await ai_service.generate_distractors(
+                    word, meaning_vi, word_type, payload.count
+                )
+                if distractors:
+                    await db.cache_ai_distractors(vid, distractors)
+                    result[vid] = distractors
+                else:
+                    result[vid] = []
+            except Exception as e:
+                print(f"AI distractors error for {vid}: {e}")
+                result[vid] = []
+
+    return result

@@ -114,4 +114,33 @@ export const vocabApi = {
       { method: "DELETE", headers },
     );
   },
+
+  // AI Features
+  getAIExamples: async (vocabularyId: string) => {
+    const headers = await authHeaders();
+    return api.request<string[]>(
+      `/vocabulary/${vocabularyId}/ai/examples`,
+      { headers },
+    );
+  },
+
+  getAIDistracters: async (vocabularyId: string, count = 3) => {
+    const headers = await authHeaders();
+    return api.request<string[]>(
+      `/vocabulary/${vocabularyId}/ai/distractors?count=${count}`,
+      { headers },
+    );
+  },
+
+  getBatchAIDistracters: async (vocabularyIds: string[], count = 3) => {
+    const headers = await authHeaders();
+    return api.request<Record<string, string[]>>(
+      `/vocabulary/ai/distractors/batch`,
+      {
+        method: "POST",
+        headers: { ...headers, "Content-Type": "application/json" },
+        body: JSON.stringify({ vocabulary_ids: vocabularyIds, count }),
+      },
+    );
+  },
 };
