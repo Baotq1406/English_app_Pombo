@@ -24,62 +24,57 @@ function shuffleArray<T>(arr: T[]): T[] {
 }
 
 async function buildQuestions(words: UserVocabularyData[]): Promise<ReviewQuestion[]> {
-  // Build questions by generating AI distractors for each word
   const questions: ReviewQuestion[] = [];
+  
+  // Pre-fetch fallback distractor pool in case AI fails
+  const excludeIds = words.map(w => w.id).join(',');
+  let fallbackDistracters: string[] = [];
+  try {
+    const distractorData = await vocabApi.getDistracters(excludeIds, Math.min(words.length * 3, 100));
+    fallbackDistracters = distractorData.map(d => d.meaning_vi).filter(Boolean) as string[];
+  } catch {}
   
   for (const word of words) {
     const correctText = word.meaning_vi || '';
+    let distractors: string[] = [];
     
     try {
-      // Get AI-generated distractors for this word
       const aiDistracters = await vocabApi.getAIDistracters(word.id, 3);
-      const distractors = aiDistracters.filter(d => d !== correctText);
-      
-      // Ensure we have exactly 3 distractors
-      while (distractors.length < 3) {
-        distractors.push('(definition not available)');
-      }
-      
-      const allOptions = shuffleArray([
-        { text: correctText, isCorrect: true },
-        ...distractors.slice(0, 3).map(m => ({ text: m, isCorrect: false })),
-      ]);
-      
-      // Find the correct option's ID (A, B, C, D)
-      const correctOptionIdx = allOptions.findIndex(o => o.isCorrect);
-      const correctOptionId = String.fromCharCode(65 + correctOptionIdx);
-      
-      questions.push({
-        word,
-        options: allOptions.map((opt, idx) => ({
-          id: String.fromCharCode(65 + idx),
-          text: opt.text,
-        })),
-        correctId: correctOptionId,
-      });
-    } catch (error) {
-      // Fallback if AI generation fails
-      console.error('Failed to generate AI distractors:', error);
-      
-      const allOptions = shuffleArray([
-        { text: correctText, isCorrect: true },
-        { text: '(definition not available)', isCorrect: false },
-        { text: '(definition not available)', isCorrect: false },
-        { text: '(definition not available)', isCorrect: false },
-      ]);
-      
-      const correctOptionIdx = allOptions.findIndex(o => o.isCorrect);
-      const correctOptionId = String.fromCharCode(65 + correctOptionIdx);
-      
-      questions.push({
-        word,
-        options: allOptions.map((opt, idx) => ({
-          id: String.fromCharCode(65 + idx),
-          text: opt.text,
-        })),
-        correctId: correctOptionId,
-      });
+      distractors = aiDistracters.filter(d => d !== correctText);
+    } catch {
+      console.error('Failed to generate AI distractors');
     }
+    
+    // Fallback to distractor pool if AI didn't give enough
+    if (distractors.length < 3) {
+      const pool = fallbackDistracters.filter(d => d !== correctText);
+      for (const d of pool) {
+        if (distractors.length >= 3) break;
+        if (!distractors.includes(d)) distractors.push(d);
+      }
+    }
+    
+    // Last resort - any remaining slot gets placeholder
+    while (distractors.length < 3) {
+      distractors.push('(definition not available)');
+    }
+    
+    const allOptions = shuffleArray([
+      { text: correctText, isCorrect: true },
+      ...distractors.slice(0, 3).map(m => ({ text: m, isCorrect: false })),
+    ]);
+    
+    const correctOptionIdx = allOptions.findIndex(o => o.isCorrect);
+    const correctOptionId = String.fromCharCode(65 + correctOptionIdx);
+    
+    questions.push({
+      word,
+      options: allOptions.map((opt, idx) => ({
+        id: String.fromCharCode(65 + idx),
+        text: opt.text,
+      })),
+      correctId: correctOptionId,
+    });
   }
   
   return questions;
