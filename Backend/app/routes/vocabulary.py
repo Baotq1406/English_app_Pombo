@@ -241,13 +241,12 @@ async def get_ai_examples(
         examples = await gemini_service.generate_examples(word, meaning_vi, word_type)
         
         if examples:
-            # Cache the examples
             await db.cache_ai_examples(vocabulary_id, examples)
             return examples
-        else:
-            raise HTTPException(status_code=500, detail="Failed to generate examples")
+        return []
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"AI service error: {str(e)}")
+        print(f"AI examples error: {e}")
+        return []
 
 
 @router.get("/{vocabulary_id}/ai/distractors", response_model=list[str])
@@ -285,10 +284,9 @@ async def get_ai_distractors(
         )
         
         if distractors:
-            # Cache the distractors
             await db.cache_ai_distractors(vocabulary_id, distractors)
             return distractors
-        else:
-            raise HTTPException(status_code=500, detail="Failed to generate distractors")
+        return []
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"AI service error: {str(e)}")
+        print(f"AI distractors error: {e}")
+        return []
