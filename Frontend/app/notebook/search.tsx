@@ -1,41 +1,45 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
-import { View, StyleSheet, ScrollView, TouchableOpacity, TextInput, ActivityIndicator, useColorScheme } from 'react-native';
-import { useFocusEffect, useRouter, Tabs } from 'expo-router';
+import { View, StyleSheet, ScrollView, TouchableOpacity, TextInput, ActivityIndicator, useColorScheme, NativeScrollEvent, NativeSyntheticEvent } from 'react-native';
+import { useFocusEffect, useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Typography } from '@/components/ui/Typography';
 import { Icon } from '@/components/ui/Icon';
 import { Colors } from '@/constants/theme';
 import { VocabularyItem, VocabularyData } from '@/components/features/notebook/VocabularyItem';
 import { EmptyState } from '@/components/features/notebook/EmptyState';
-
-const initialMockResults: VocabularyData[] = [
-    { id: '1', word: 'resilient', type: 'adj', level: 1, isReviewing: true, phonetic: '/rɪˈzɪl.jənt/', shortDefinition: 'kiên cường', detailedDefinition: 'Khả năng phục hồi nhanh chóng.', examples: ["She is resilient."] },
-    { id: '2', word: 'optimistic', type: 'adj', level: 1, isReviewing: false, phonetic: '/ˌɒp.tɪˈmɪs.tɪk/', shortDefinition: 'lạc quan', detailedDefinition: 'Tin vào điều tốt đẹp.', examples: ["Stay optimistic."] },
-    { id: '3', word: 'consistent', type: 'adj', level: 1, isReviewing: true, phonetic: '/kənˈsɪs.tənt/', shortDefinition: 'kiên định', detailedDefinition: 'Luôn giữ vững phong độ.', examples: ["Be consistent in learning."] },
-    { id: '4', word: 'ambitious', type: 'adj', level: 1, isReviewing: false, phonetic: '/æmˈbɪʃ.əs/', shortDefinition: 'tham vọng', detailedDefinition: 'Có ý chí tiến thủ lớn.', examples: ["An ambitious plan."] },
-    { id: '5', word: 'discipline', type: 'n', level: 1, isReviewing: true, phonetic: '/ˈdɪs.ə.plɪn/', shortDefinition: 'kỷ luật', detailedDefinition: 'Sự tự giác tuân thủ quy tắc.', examples: ["Self-discipline is key."] },
-    { id: '6', word: 'versatile', type: 'adj', level: 1, isReviewing: false, phonetic: '/ˈvɜː.sə.taɪl/', shortDefinition: 'linh hoạt', detailedDefinition: 'Nhiều công dụng, đa năng.', examples: ["A versatile tool."] },
-    { id: '7', word: 'empathy', type: 'n', level: 1, isReviewing: true, phonetic: '/ˈem.pə.θi/', shortDefinition: 'thấu cảm', detailedDefinition: 'Thấu hiểu cảm xúc người khác.', examples: ["Show some empathy."] },
-    { id: '8', word: 'integrity', type: 'n', level: 1, isReviewing: false, phonetic: '/ɪnˈteɡ.rə.ti/', shortDefinition: 'chính trực', detailedDefinition: 'Sự trung thực và đạo đức.', examples: ["A man of integrity."] },
-    { id: '9', word: 'innovative', type: 'adj', level: 1, isReviewing: true, phonetic: '/ˈɪn.ə.veɪ.tɪv/', shortDefinition: 'đột phá', detailedDefinition: 'Có tính sáng tạo mới mẻ.', examples: ["An innovative idea."] },
-    { id: '10', word: 'patience', type: 'n', level: 1, isReviewing: false, phonetic: '/ˈpeɪ.ʃəns/', shortDefinition: 'kiên nhẫn', detailedDefinition: 'Khả năng chờ đợi bình tĩnh.', examples: ["Patience is a virtue."] },
-];
+import { vocabApi } from '@/services/vocabulary';
 
 export default function SearchScreen() {
     const colorScheme = useColorScheme() ?? 'light';
     const colors = Colors[colorScheme];
     const router = useRouter();
     const insets = useSafeAreaInsets();
-    
-    const [allData, setAllData] = useState<VocabularyData[]>(initialMockResults);
-    const [savedData, setSavedData] = useState<VocabularyData[]>(initialMockResults);
-    
+
     const [searchQuery, setSearchQuery] = useState('');
     const [debouncedQuery, setDebouncedQuery] = useState('');
     const [isLoading, setIsLoading] = useState(false);
+    const [results, setResults] = useState<(VocabularyData & { isSynced?: boolean })[]>([]);
+    const [syncing, setSyncing] = useState<Set<string>>(new Set());
+    const [currentOffset, setCurrentOffset] = useState(0);
+    const [isLoadingMore, setIsLoadingMore] = useState(false);
+    const [hasMore, setHasMore] = useState(true);
+    const [syncedIds, setSyncedIds] = useState<Set<string>>(new Set());
 
-    const [isSelectionMode, setIsSelectionMode] = useState(false);
     const textInputRef = useRef<TextInput>(null);
+    const scrollViewRef = useRef<ScrollView>(null);
+
+    // Load synced vocabulary on mount
+    useEffect(() => {
+        const loadSyncedVocab = async () => {
+            try {
+                const mine = await vocabApi.getMine();
+                setSyncedIds(new Set(mine.map(v => v.id)));
+            } catch (e) {
+                console.error('Failed to load synced vocabulary', e);
+            }
+        };
+        loadSyncedVocab();
+    }, []);
 
     useFocusEffect(
         useCallback(() => {
@@ -51,40 +55,117 @@ export default function SearchScreen() {
         const handler = setTimeout(() => {
             setDebouncedQuery(searchQuery);
             setIsLoading(false);
-        }, 400); 
+        }, 400);
         return () => clearTimeout(handler);
     }, [searchQuery]);
 
-    const results = useMemo(() => {
-        if (debouncedQuery.trim().length <= 1) return [];
-        return allData.filter(item => 
-            item.word.toLowerCase().includes(debouncedQuery.toLowerCase())
-        );
-    }, [allData, debouncedQuery]);
+    useEffect(() => {
+        if (debouncedQuery.trim().length > 1) {
+            // Search mode
+            vocabApi.search(debouncedQuery).then(data => {
+                const mapped = data.map(r => ({
+                    id: r.id,
+                    word: r.word,
+                    type: r.type || '',
+                    isReviewing: true,
+                    level: r.level ?? 1,
+                    phonetic: r.phonetic || undefined,
+                    shortDefinition: r.meaning_vi || '',
+                    detailedDefinition: r.definition_vi || undefined,
+                    examples: [r.example_en, r.example_vi].filter(Boolean) as string[] || undefined,
+                    isSynced: syncedIds.has(r.id),
+                }));
+                setResults(mapped);
+                setCurrentOffset(0);
+                setHasMore(true);
+            }).catch(() => setResults([]));
+        } else if (debouncedQuery === '') {
+            // Empty query - lazy load all vocabulary
+            setCurrentOffset(0);
+            vocabApi.getVocabulary(0, 50).then(data => {
+                const mapped = data.map(r => ({
+                    id: r.id,
+                    word: r.word,
+                    type: r.type || '',
+                    isReviewing: true,
+                    level: r.level ?? 1,
+                    phonetic: r.phonetic || undefined,
+                    shortDefinition: r.meaning_vi || '',
+                    detailedDefinition: r.definition_vi || undefined,
+                    examples: [r.example_en, r.example_vi].filter(Boolean) as string[] || undefined,
+                    isSynced: syncedIds.has(r.id),
+                }));
+                setResults(mapped);
+                setCurrentOffset(50);
+                setHasMore(data.length === 50);
+            }).catch(() => setResults([]));
+        } else {
+            setResults([]);
+        }
+    }, [debouncedQuery, syncedIds]);
 
-    const hasChanges = useMemo(() => {
-        return allData.some(item => {
-            const original = savedData.find(o => o.id === item.id);
-            return original ? item.isReviewing !== original.isReviewing : false;
-        });
-    }, [allData, savedData]);
-
-    const toggleVocabularyStatus = (id: string) => {
-        setAllData(prev => prev.map(item => 
-            item.id === id ? { ...item, isReviewing: !item.isReviewing } : item
-        ));
-    };
-
-    const handleLongPress = (id: string) => {
-        if (!isSelectionMode) {
-            setIsSelectionMode(true);
-            toggleVocabularyStatus(id);
+    const handleSync = async (vocabId: string) => {
+        setSyncing(prev => new Set(prev).add(vocabId));
+        try {
+            await vocabApi.sync(vocabId);
+            // Mark as synced, don't remove
+            setSyncedIds(prev => new Set(prev).add(vocabId));
+            setResults(prev =>
+                prev.map(r => r.id === vocabId ? { ...r, isSynced: true } : r)
+            );
+        } catch (e: any) {
+            const msg = e?.payload?.detail || 'Không thể thêm từ này';
+            alert(msg);
+        } finally {
+            setSyncing(prev => {
+                const next = new Set(prev);
+                next.delete(vocabId);
+                return next;
+            });
         }
     };
 
-    const handleSave = () => {
-        setSavedData([...allData]); 
-        setIsSelectionMode(false);
+    const loadMore = async () => {
+        if (!debouncedQuery || isLoadingMore || !hasMore) return;
+        if (debouncedQuery.length > 1) return; // Don't paginate search results
+        
+        setIsLoadingMore(true);
+        try {
+            const data = await vocabApi.getVocabulary(currentOffset, 50);
+            if (data.length > 0) {
+                const mapped = data.map(r => ({
+                    id: r.id,
+                    word: r.word,
+                    type: r.type || '',
+                    isReviewing: true,
+                    level: r.level ?? 1,
+                    phonetic: r.phonetic || undefined,
+                    shortDefinition: r.meaning_vi || '',
+                    detailedDefinition: r.definition_vi || undefined,
+                    examples: [r.example_en, r.example_vi].filter(Boolean) as string[] || undefined,
+                    isSynced: syncedIds.has(r.id),
+                }));
+                setResults(prev => [...prev, ...mapped]);
+                setCurrentOffset(prev => prev + 50);
+                setHasMore(data.length === 50);
+            } else {
+                setHasMore(false);
+            }
+        } catch (e) {
+            console.error('Failed to load more', e);
+        } finally {
+            setIsLoadingMore(false);
+        }
+    };
+
+    const handleScroll = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
+        const contentHeight = event.nativeEvent.contentSize.height;
+        const scrollY = event.nativeEvent.contentOffset.y;
+        const layoutHeight = event.nativeEvent.layoutMeasurement.height;
+        
+        if (scrollY + layoutHeight >= contentHeight - 100 && !isLoadingMore && hasMore && debouncedQuery === '') {
+            loadMore();
+        }
     };
 
     const renderContent = () => {
@@ -98,8 +179,7 @@ export default function SearchScreen() {
 
         if (debouncedQuery.length > 1 && results.length === 0) {
             return (
-                <EmptyState message={`Từ vựng này tôi không tìm thấy trong sổ tay của bạn, đừng lo lắng
-Hãy vào cửa hàng mở gói từ vựng ngay, Hôm nay sẽ là một ngày may mắn của bạn.`} />
+                <EmptyState message={`Từ vựng này tôi không tìm thấy trong sổ tay của bạn, đừng lo lắng\nHãy vào cửa hàng mở gói từ vựng ngay, Hôm nay sẽ là một ngày may mắn của bạn.`} />
             );
         }
 
@@ -107,25 +187,48 @@ Hãy vào cửa hàng mở gói từ vựng ngay, Hôm nay sẽ là một ngày 
             return (
                 <View style={styles.resultsList}>
                     {results.map((item) => (
-                        <VocabularyItem 
-                            key={item.id} 
-                            data={item} 
-                            isSelectionMode={isSelectionMode}
-                            onLongPress={() => handleLongPress(item.id)}
-                            onSelect={() => toggleVocabularyStatus(item.id)}
-                            statusColor={item.isReviewing ? colors.primary : colors.secondary}
-                        />
+                        <View key={item.id} style={styles.resultRow}>
+                            <View style={{ flex: 1 }}>
+                                <VocabularyItem
+                                    data={item}
+                                    isSelectionMode={false}
+                                    onLongPress={() => {}}
+                                    onSelect={() => {}}
+                                    statusColor={colors.primary}
+                                />
+                            </View>
+                            {item.isSynced ? (
+                                <View style={[styles.addBtn, { backgroundColor: colors.primary }]}>
+                                    <Typography variant="tiny" color="#fff">
+                                        ✓ Đã thêm
+                                    </Typography>
+                                </View>
+                            ) : (
+                                <TouchableOpacity
+                                    style={[styles.addBtn, { backgroundColor: syncing.has(item.id) ? colors.disabled : colors.primary }]}
+                                    onPress={() => handleSync(item.id)}
+                                    disabled={syncing.has(item.id)}
+                                >
+                                    <Typography variant="tiny" color="#fff">
+                                        {syncing.has(item.id) ? '...' : '+ Thêm'}
+                                    </Typography>
+                                </TouchableOpacity>
+                            )}
+                        </View>
                     ))}
+                    {isLoadingMore && debouncedQuery === '' && (
+                        <View style={styles.loaderContainer}>
+                            <ActivityIndicator size="small" color={colors.primary} />
+                        </View>
+                    )}
                 </View>
             );
         }
-        return null; 
+        return null;
     };
 
     return (
         <View style={[styles.mainContainer, { backgroundColor: colors.background }]}>
-            <Tabs.Screen options={{ tabBarStyle: { display: 'none' } }} />
-
             <View style={[styles.header, { paddingTop: Math.max(insets.top, 20) }]}>
                 <TouchableOpacity onPress={() => router.back()} style={styles.iconButton}>
                     <Icon name="ChevronLeft" size={28} color={colors.textPrimary} />
@@ -137,42 +240,33 @@ Hãy vào cửa hàng mở gói từ vựng ngay, Hôm nay sẽ là một ngày 
             </View>
 
             <View style={styles.searchSection}>
-                <View style={styles.searchRow}>
-                    <View style={[styles.searchBar, { backgroundColor: colors.surface, borderColor: colors.primary }]}>
-                        <Icon name="Search" size={18} color={colors.primary} />
-                        <TextInput
-                            ref={textInputRef}
-                            style={[styles.searchInput, { color: colors.textPrimary }]}
-                            placeholder="Từ cần tìm"
-                            placeholderTextColor={colors.textSecondary}
-                            value={searchQuery}
-                            onChangeText={setSearchQuery}
-                            autoCapitalize="none"
-                            autoCorrect={false}
-                        />
-                        {searchQuery !== '' ? (
-                            <TouchableOpacity onPress={() => setSearchQuery('')} style={styles.clearBtn}>
-                                <Icon name="XCircle" size={18} color={colors.textSecondary} />
-                            </TouchableOpacity>
-                        ) : null}
-                    </View>
-                    
-                    <TouchableOpacity 
-                        style={[
-                            styles.saveBtn, 
-                            { backgroundColor: hasChanges ? colors.secondary : colors.disabled }
-                        ]} 
-                        disabled={!hasChanges}
-                        onPress={handleSave}
-                    >
-                        <Typography variant="tiny" color={hasChanges ? colors.textOnAction : colors.textSecondary}>
-                            Lưu thay đổi
-                        </Typography>
-                    </TouchableOpacity>
+                <View style={[styles.searchBar, { backgroundColor: colors.surface, borderColor: colors.primary }]}>
+                    <Icon name="Search" size={18} color={colors.primary} />
+                    <TextInput
+                        ref={textInputRef}
+                        style={[styles.searchInput, { color: colors.textPrimary }]}
+                        placeholder="Từ cần tìm"
+                        placeholderTextColor={colors.textSecondary}
+                        value={searchQuery}
+                        onChangeText={setSearchQuery}
+                        autoCapitalize="none"
+                        autoCorrect={false}
+                    />
+                    {searchQuery !== '' ? (
+                        <TouchableOpacity onPress={() => setSearchQuery('')} style={styles.clearBtn}>
+                            <Icon name="XCircle" size={18} color={colors.textSecondary} />
+                        </TouchableOpacity>
+                    ) : null}
                 </View>
             </View>
 
-            <ScrollView contentContainerStyle={styles.scrollContainer} showsVerticalScrollIndicator={false}>
+            <ScrollView
+                ref={scrollViewRef}
+                contentContainerStyle={styles.scrollContainer}
+                showsVerticalScrollIndicator={false}
+                onScroll={handleScroll}
+                scrollEventThrottle={16}
+            >
                 {renderContent()}
             </ScrollView>
         </View>
@@ -185,8 +279,8 @@ const styles = StyleSheet.create({
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'space-between',
-        paddingHorizontal: 16,  
-        paddingBottom: 15,     
+        paddingHorizontal: 16,
+        paddingBottom: 15,
     },
     iconButton: {
         width: 40,
@@ -197,23 +291,15 @@ const styles = StyleSheet.create({
     headerTitle: { flex: 1, textAlign: 'center' },
     scrollContainer: { flexGrow: 1, paddingHorizontal: 24, paddingTop: 10, paddingBottom: 40 },
     searchSection: {
-        paddingTop: 5,
         paddingHorizontal: 20,
         paddingBottom: 20,
     },
-    searchRow: {
+    searchBar: {
         flexDirection: 'row',
         alignItems: 'center',
-        marginBottom: 24,
-        gap: 10,
-    },
-    searchBar: {
-        flex: 1,
         height: 44,
         borderRadius: 22,
         borderWidth: 1,
-        flexDirection: 'row',
-        alignItems: 'center',
         paddingHorizontal: 16,
     },
     searchInput: {
@@ -223,23 +309,25 @@ const styles = StyleSheet.create({
         fontFamily: 'BeVietnamPro-Medium',
         fontSize: 12,
     },
-    clearBtn: {
-        padding: 4,
-    },
-    saveBtn: {
-        paddingHorizontal: 12,
-        height: 38,
-        borderRadius: 10,
-        justifyContent: 'center',
-        alignItems: 'center',
-    },
-    resultsList: {
-        flex: 1,
-    },
+    clearBtn: { padding: 4 },
+    resultsList: { flex: 1 },
     loaderContainer: {
         flex: 1,
         justifyContent: 'center',
         alignItems: 'center',
         paddingTop: 50,
+    },
+    resultRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        marginBottom: 8,
+    },
+    addBtn: {
+        paddingHorizontal: 12,
+        height: 32,
+        borderRadius: 8,
+        justifyContent: 'center',
+        alignItems: 'center',
+        marginLeft: 8,
     },
 });
