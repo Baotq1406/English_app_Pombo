@@ -3,6 +3,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.core.db import db
+from app.core.gemini import gemini_service
 from app.dependencies import get_current_user
 from app.schemas.vocabulary import (
     SubmitAnswerRequest,
@@ -205,3 +206,89 @@ async def remove_from_notebook(
     if not deleted:
         raise HTTPException(status_code=404, detail="Vocabulary not found in your notebook")
     return {"ok": True}
+
+
+# AI-Powered Features
+@router.get("/{vocabulary_id}/ai/examples", response_model=list[str])
+async def get_ai_examples(
+    vocabulary_id: str,
+    user=Depends(get_current_user),
+):
+    """
+    Generate AI example sentences for a vocabulary word.
+    Returns 3 natural English example sentences.
+    """
+    user_id = user.get("sub")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Invalid token payload")
+    
+    # Get vocabulary details
+    vocab = await db.get_vocabulary_by_id(vocabulary_id)
+    if not vocab:
+        raise HTTPException(status_code=404, detail="Vocabulary not found")
+    
+    # Check cache first
+    cached_examples = await db.get_ai_examples_cache(vocabulary_id)
+    if cached_examples:
+        return cached_examples
+    
+    # Generate examples using Gemini
+    word = vocab.get("word", "")
+    meaning_vi = vocab.get("meaning_vi", "")
+    word_type = vocab.get("type", "word")
+    
+    try:
+        examples = await gemini_service.generate_examples(word, meaning_vi, word_type)
+        
+        if examples:
+            # Cache the examples
+            await db.cache_ai_examples(vocabulary_id, examples)
+            return examples
+        else:
+            raise HTTPException(status_code=500, detail="Failed to generate examples")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"AI service error: {str(e)}")
+
+
+@router.get("/{vocabulary_id}/ai/distractors", response_model=list[str])
+async def get_ai_distractors(
+    vocabulary_id: str,
+    count: int = Query(default=3, ge=1, le=5),
+    user=Depends(get_current_user),
+):
+    """
+    Generate AI distractors (plausible wrong answers) for a vocabulary word.
+    Useful for creating better quiz questions.
+    """
+    user_id = user.get("sub")
+    if not user_id:
+        raise HTTPException(status_code=401, detail="Invalid token payload")
+    
+    # Get vocabulary details
+    vocab = await db.get_vocabulary_by_id(vocabulary_id)
+    if not vocab:
+        raise HTTPException(status_code=404, detail="Vocabulary not found")
+    
+    # Check cache first
+    cached_distractors = await db.get_ai_distractors_cache(vocabulary_id, count)
+    if cached_distractors:
+        return cached_distractors
+    
+    # Generate distractors using Gemini
+    word = vocab.get("word", "")
+    meaning_vi = vocab.get("meaning_vi", "")
+    word_type = vocab.get("type", "word")
+    
+    try:
+        distractors = await gemini_service.generate_distractors(
+            word, meaning_vi, word_type, count
+        )
+        
+        if distractors:
+            # Cache the distractors
+            await db.cache_ai_distractors(vocabulary_id, distractors)
+            return distractors
+        else:
+            raise HTTPException(status_code=500, detail="Failed to generate distractors")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"AI service error: {str(e)}")

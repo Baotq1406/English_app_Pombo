@@ -8,6 +8,9 @@ class Settings(BaseSettings):
     jwt_issuer: str = "pombo-api"
     jwt_audience: str = "pombo-app"
     refresh_token_expire_days: int = 30
+    
+    # AI & LLM
+    gemini_api_key: str = ""  # Optional for development; required for AI features
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
